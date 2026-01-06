@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-database-compat.js"></script>
+
+<meta charset="UTF-8" />
+<title>Smart Green Corridor – Conflict Demo</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+
+<style>
+html, body { height:100%; margin:0; }
+#map { height:100%; width:100%; }
+
+.info {
+  position:absolute;
+  top:12px; left:12px;
+  background:white;
+  padding:14px;
+  z-index:1000;
+  border-radius:10px;
+  font-family:Arial;
+  box-shadow:0 4px 12px rgba(0,0,0,0.3);
+  min-width:300px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="map"></div>
+<div class="info" id="info">Click start and destination</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+<script>
+/* ================= FIREBASE ================= */
+firebase.initializeApp({
+  apiKey: "AIzaSyBH8RJq_e6vOiLk06TWHlT8rNV07i_B7cE",
+  authDomain: "greencorridor-dd05d.firebaseapp.com",
+  databaseURL: "https://greencorridor-dd05d-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "greencorridor-dd05d",
+  storageBucket: "greencorridor-dd05d.firebasestorage.app",
+  messagingSenderId: "437478898078",
+  appId: "1:437478898078:web:80eb966eaa8ff78d697e8f"
+
+
+});
+const db = firebase.database();
+
+/* ================= MAP ================= */
+const map = L.map("map").setView([17.385, 78.4867], 14);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png").addTo(map);
+
+let startMarker, endMarker;
+let routeCoords = [];
+let conflictIndex = 0; // will be set after route loads
+; // junction deeper into route
+
+/* ================= AMBULANCES ================= */
+const ambulances = {
+  A1: { index: 0, priority: "HIGH", marker: null },
+  A2: { index: 0, priority: "LOW", marker: null }
+};
+
+let routeA1 = [];
+let routeA2 = [];
+let signals = [];
+
+/* ================= SIGNAL SVG (3 LIGHTS) ================= */
+function signalSVG(state) {
+  return `
+  <svg width="26" height="70">
+    <rect width="26" height="70" rx="6" fill="#222"/>
+    <circle cx="13" cy="14" r="6" fill="${state==="RED"?"red":"#400"}"/>
+    <circle cx="13" cy="35" r="6" fill="#444400"/>
+    <circle cx="13" cy="56" r="6" fill="${state==="GREEN"?"lime":"#040"}"/>
+  </svg>`;
+}
+
+/* ================= ROUTE ================= */
+map.on("click", e => {
+  if (!startMarker) {
+    startMarker = L.marker(e.latlng).addTo(map).bindPopup("Start").openPopup();
+  } else if (!endMarker) {
+    endMarker = L.marker(e.latlng).addTo(map).bindPopup("Destination").openPopup();
+    drawRoute(startMarker.getLatLng(), endMarker.getLatLng());
+  }
+});
+
+function drawRoute(start, end) {
+  fetch(`https://router.project-osrm.org/route/v1/driving/${start.lng},${start.lat};${end.lng},${end.lat}?overview=full&geometries=geojson`)
+    .then(r => r.json())
+    .then(data => {
+      routeCoords = data.routes[0].geometry.coordinates.map(c => [c[1], c[0]]);
+      conflictIndex = Math.floor(routeCoords.length / 2);
+      routeA1 = routeCoords;
+
+      const junction = routeCoords[conflictIndex];
+      routeA2 = generateLongPerpendicularRoute(junction);
+
+      // HIGH priority route
+      L.polyline(routeA1, {
+        color:"#1e90ff",
+        weight:6
+      }).addTo(map);
+
+      // LOW priority route — LONG & BRIGHT
+      L.polyline(routeA2, {
+        color:"#FFD700",
+        weight:7,
+        dashArray:"14,10",
+        opacity:1
+      }).addTo(map);
+
+      createSignal(junction);
+      startAmbulances();
+	if (routeCoords.length < 20) {
+  alert("Please select points farther apart");
+  return;
+}
+
+    });
+}
+
+/* ================= LONG PERPENDICULAR ROUTE ================= */
+function generateLongPerpendicularRoute(center) {
+  const r = [];
+  for (let i = -80; i <= 80; i++) {   // MUCH LONGER
+    r.push([center[0], center[1] + i * 0.000045]);
+  }
+  return r;
+}
+
+/* ================= SIGNAL ================= */
+function createSignal(pos) {
+  const marker = L.marker(pos, {
+    icon: L.divIcon({html:signalSVG("RED"), iconSize:[26,70]})
+  }).addTo(map);
+
+  signals = [{
+    index: conflictIndex,
+    lat: pos[0],
+    lng: pos[1],
+    marker,
+    state:"RED"
+  }];
+}
+
+/* ================= AMBULANCE LOGIC ================= */
+function startAmbulances() {
+  // Reset indices
+  ambulances.A1.index = 0;
+  ambulances.A2.index = 18; // LOW priority starts far behind
+
+  Object.entries(ambulances).forEach(([id, a]) => {
+    const pos = routeCoords[a.index];
+    if (!pos) return;
+
+    a.marker = L.marker(pos, {
+      icon: L.divIcon({
+        html: `
+          <div style="
+            font-size:42px;
+            filter: drop-shadow(0 0 6px rgba(0,0,0,0.6));
+          ">
+            🚑
+          </div>
+        `,
+        iconSize: [42, 42],
+        className: ""
+      })
+    }).addTo(map);
+  });
+
+  moveAmbulances();
+}
+
+
+function moveAmbulances() {
+  setInterval(() => {
+
+    // HIGH priority — ALWAYS MOVES
+    const a1 = ambulances.A1;
+    a1.index++;
+    const p1 = routeA1[a1.index];
+    if (p1) {
+      a1.marker.setLatLng(p1);
+      db.ref("simulation/ambulances/A1").set({
+        lat:p1[0], lng:p1[1], priority:"HIGH"
+      });
+    }
+
+    // LOW priority — HARD STOP near junction
+    const distToJunction = Math.abs(conflictIndex - a1.index);
+    const a2 = ambulances.A2;
+
+    if (distToJunction > 10) {
+      a2.index++; // move ONLY if safe
+    }
+
+    const p2 = routeA2[a2.index];
+    if (p2) {
+      a2.marker.setLatLng(p2);
+      db.ref("simulation/ambulances/A2").set({
+        lat:p2[0], lng:p2[1], priority:"LOW"
+      });
+    }
+
+    updateSignal();
+  }, 650);
+}
+
+/* ================= SIGNAL PRIORITY ================= */
+function updateSignal() {
+  const dist = Math.abs(conflictIndex - ambulances.A1.index);
+  const s = signals[0];
+
+  if (dist < 9) {
+    s.marker.setIcon(L.divIcon({html:signalSVG("GREEN"), iconSize:[17,50]}));
+    db.ref("simulation/activeSignal").set({
+      lat:s.lat, lng:s.lng, state:"GREEN", ambulanceId:"A1"
+    });
+    document.getElementById("info").innerHTML =
+      "🚑 HIGH priority passing<br/>🚐 LOW priority halted";
+  } else {
+    s.marker.setIcon(L.divIcon({html:signalSVG("RED"), iconSize:[17,50]}));
+    document.getElementById("info").innerHTML =
+      "Both ambulances approaching junction";
+  }
+}
+</script>
+
+</body>
+</html>

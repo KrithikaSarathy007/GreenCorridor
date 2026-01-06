@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Green Corridor – Mapbox Micro View</title>
+
+  <!-- Mapbox -->
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.js"></script>
+  <link
+    href="https://api.mapbox.com/mapbox-gl-js/v2.15.0/mapbox-gl.css"
+    rel="stylesheet"
+  />
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    #map {
+      width: 100vw;
+      height: 100vh;
+    }
+
+    /* Small pointer labels that sit above each ambulance marker */
+    .amb-label {
+      position: relative;
+      background: rgba(0, 0, 0, 0.75);
+      color: #fff;
+      padding: 2px 4px;
+      border-radius: 4px;
+      font-size: 10px;
+      text-align: center;
+      margin-top: -4px;
+    }
+
+    .amb-label::after {
+      content: "";
+      position: absolute;
+      bottom: -4px;
+      left: 50%;
+      transform: translateX(-50%);
+      border-width: 4px 4px 0 4px;
+      border-style: solid;
+      border-color: rgba(0, 0, 0, 0.75) transparent transparent transparent;
+    }
+
+    .amb-high-icon {
+      font-size: 24px;
+      text-align: center;
+    }
+
+    .amb-low-icon {
+      font-size: 22px;
+      text-align: center;
+    }
+
+    /* Traffic signal container */
+    .traffic-signal {
+      width: 22px;
+      height: 68px;
+      background: #222;
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-around;
+      align-items: center;
+      padding: 4px 0;
+      box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+    }
+
+    .signal-light {
+      width: 11px;
+      height: 11px;
+      border-radius: 50%;
+      background: #111;
+    }
+  </style>
+</head>
+
+<body>
+  <div id="map"></div>
+
+<script>
+  /* ================= FIREBASE ================= */
+  const firebaseConfig = {
+    apiKey: "AIzaSyBH8RJq_e6vOiLk06TWHlT8rNV07i_B7cE",
+    authDomain: "greencorridor-dd05d.firebaseapp.com",
+    databaseURL: "https://greencorridor-dd05d-default-rtdb.asia-southeast1.firebasedatabase.app",
+    projectId: "greencorridor-dd05d",
+    storageBucket: "greencorridor-dd05d.firebasestorage.app",
+    messagingSenderId: "437478898078",
+    appId: "1:437478898078:web:80eb966eaa8ff78d697e8f"
+  };
+
+  firebase.initializeApp(firebaseConfig);
+  const db = firebase.database();
+
+  /* ================= MAPBOX ================= */
+  mapboxgl.accessToken =
+    "pk.eyJ1Ijoiaml5YWNoYW5kcmFwdSIsImEiOiJjbWsxN2xvYngwM2l4M2pwZTBza2ZweDR3In0.Nie4q52v3IIUDClaDC3Hpw";
+
+  const MAP_CENTER = [78.4867, 17.3850];
+
+  const map = new mapboxgl.Map({
+    container: "map",
+    style: "mapbox://styles/mapbox/streets-v11",
+    center: MAP_CENTER,
+    zoom: 17,
+    pitch: 60,
+    bearing: -20,
+    antialias: true
+  });
+
+  map.on("load", () => {
+    /* ROUTE SOURCES */
+    map.addSource("high-route", {
+      type: "geojson",
+      data: { type: "Feature", geometry: { type: "LineString", coordinates: [] } }
+    });
+    map.addLayer({
+      id: "high-route-line",
+      type: "line",
+      source: "high-route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: { "line-color": "#0d99ff", "line-width": 6, "line-opacity": 0.95 }
+    });
+
+    map.addSource("low-route", {
+      type: "geojson",
+      data: { type: "Feature", geometry: { type: "LineString", coordinates: [] } }
+    });
+    map.addLayer({
+      id: "low-route-line",
+      type: "line",
+      source: "low-route",
+      layout: { "line-cap": "round", "line-join": "round" },
+      paint: {
+        "line-color": "#ffcf3f",
+        "line-width": 4,
+        "line-opacity": 0.95,
+        "line-dasharray": [1.2, 1.2]
+      }
+    });
+
+    /* REAL-LIFE LOOKING AMBULANCE EMOJI MARKERS */
+
+    function createEmojiAmbulance(emoji, labelText) {
+      const container = document.createElement("div");
+      container.style.display = "flex";
+      container.style.flexDirection = "column";
+      container.style.alignItems = "center";
+      container.style.transform = "translateY(-6px)";
+
+      const badge = document.createElement("div");
+      badge.style.padding = "2px 6px";
+      badge.style.borderRadius = "16px";
+      badge.style.background = "rgba(0,0,0,0.85)";
+      badge.style.display = "flex";
+      badge.style.alignItems = "center";
+      badge.style.gap = "4px";
+      badge.style.color = "#ffffff";
+      badge.style.fontSize = "11px";
+      badge.style.fontWeight = "600";
+      badge.style.boxShadow = "0 4px 10px rgba(0,0,0,0.4)";
+
+      const icon = document.createElement("span");
+      icon.textContent = emoji;
+      icon.style.fontSize = "18px";
+
+      const label = document.createElement("span");
+      label.textContent = labelText;
+
+      badge.appendChild(icon);
+      badge.appendChild(label);
+      container.appendChild(badge);
+
+      return container;
+    }
+
+    const highMarker = new mapboxgl.Marker(
+      createEmojiAmbulance("🚑", "HIGH priority")
+    )
+      .setLngLat(MAP_CENTER)
+      .addTo(map);
+
+    const lowMarker = new mapboxgl.Marker(
+      createEmojiAmbulance("🚐", "LOW priority")
+    )
+      .setLngLat(MAP_CENTER)
+      .addTo(map);
+
+    const rawMarkers = {};
+
+    /* TRAFFIC SIGNAL + CAMERA */
+
+    const signalEl = document.createElement("div");
+    signalEl.className = "traffic-signal";
+
+    const redLight = document.createElement("div");
+    const amberLight = document.createElement("div");
+    const greenLight = document.createElement("div");
+
+    redLight.className = "signal-light";
+    amberLight.className = "signal-light";
+    greenLight.className = "signal-light";
+
+    signalEl.appendChild(redLight);
+    signalEl.appendChild(amberLight);
+    signalEl.appendChild(greenLight);
+
+    const signalMarker = new mapboxgl.Marker(signalEl)
+      .setLngLat(MAP_CENTER)
+      .addTo(map);
+
+    function setSignalState(state) {
+      redLight.style.background = "#111";
+      amberLight.style.background = "#111";
+      greenLight.style.background = "#111";
+
+      if (state === "GREEN") {
+        redLight.style.background = "#400";
+        amberLight.style.background = "#552";
+        greenLight.style.background = "lime";
+      } else if (state === "AMBER" || state === "YELLOW") {
+        redLight.style.background = "#400";
+        amberLight.style.background = "gold";
+        greenLight.style.background = "#040";
+      } else {
+        redLight.style.background = "red";
+        amberLight.style.background = "#552";
+        greenLight.style.background = "#040";
+      }
+    }
+
+    function keepMapInFrame(centerLngLat) {
+      map.easeTo({
+        center: centerLngLat,
+        zoom: 18,
+        pitch: 70,
+        bearing: -20,
+        duration: 400
+      });
+    }
+
+    /* STATE FOR SIGNAL LOGIC */
+    let lastHighState = null;      // HIGH ambulance state
+    let lastLowPos = null;         // last LOW coords
+    let isLowMoving = false;       // LOW movement flag
+
+    function updateSignal() {
+      // GREEN when HIGH is CROSSING and LOW is halted
+      if (lastHighState === "CROSSING" && !isLowMoving) {
+        setSignalState("GREEN");
+      } else {
+        setSignalState("RED");
+      }
+    }
+
+    /* LIVE SYNC FROM FIREBASE */
+
+    const highCoords = [];
+    const lowCoords = [];
+
+    db.ref("simulation/ambulances").on("value", snap => {
+      const data = snap.val();
+      if (!data) return;
+
+      let latestHighPos = null;
+
+      Object.entries(data).forEach(([id, amb]) => {
+        const lngLat = [amb.lng, amb.lat];
+        const isHigh = amb.priority === "HIGH";
+
+        if (isHigh) {
+          // update route + marker for HIGH
+          highCoords.push(lngLat);
+          map.getSource("high-route").setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: highCoords }
+          });
+          highMarker.setLngLat(lngLat);
+          latestHighPos = lngLat;
+
+          // track HIGH state
+          lastHighState = amb.state || null;
+        } else {
+          // update route + marker for LOW
+          lowCoords.push(lngLat);
+          map.getSource("low-route").setData({
+            type: "Feature",
+            geometry: { type: "LineString", coordinates: lowCoords }
+          });
+          lowMarker.setLngLat(lngLat);
+
+          // detect LOW movement based on coordinate change
+          if (lastLowPos) {
+            const dx = lngLat[0] - lastLowPos[0];
+            const dy = lngLat[1] - lastLowPos[1];
+            const distSq = dx * dx + dy * dy;
+            isLowMoving = distSq > 1e-12;
+          } else {
+            isLowMoving = false;
+          }
+          lastLowPos = lngLat;
+        }
+
+        // small raw marker
+        if (!rawMarkers[id]) {
+          const el = document.createElement("div");
+          el.style.width = "6px";
+          el.style.height = "6px";
+          el.style.borderRadius = "50%";
+          el.style.background = isHigh ? "#0d99ff" : "#ffcf3f";
+          el.style.boxShadow = "0 0 6px rgba(0,0,0,0.4)";
+          rawMarkers[id] = new mapboxgl.Marker(el)
+            .setLngLat(lngLat)
+            .addTo(map);
+        } else {
+          rawMarkers[id].setLngLat(lngLat);
+        }
+      });
+
+      if (latestHighPos) keepMapInFrame(latestHighPos);
+
+      // update signal after processing positions + state
+      updateSignal();
+    });
+
+    db.ref("simulation/activeSignal").on("value", snap => {
+      const s = snap.val();
+      if (!s) return;
+
+      signalMarker.setLngLat([s.lng, s.lat]);
+
+      // whenever signal location changes, also refresh color
+      updateSignal();
+    });
+  });
+</script>
+
+
+</body>
+</html>

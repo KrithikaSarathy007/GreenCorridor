@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Junction Micro Simulation</title>
+
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/8.10.0/firebase-database.js"></script>
+
+<style>
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #2b2b2b;
+}
+
+canvas {
+  display: block;
+  margin: auto;
+  background: #2b2b2b;
+}
+</style>
+</head>
+
+<body>
+
+<canvas id="junctionCanvas" width="900" height="900"></canvas>
+
+<script>
+/* ================= FIREBASE ================= */
+const firebaseConfig = {
+  apiKey: "AIzaSyBH8RJq_e6vOiLk06TWHlT8rNV07i_B7cE",
+  authDomain: "greencorridor-dd05d.firebaseapp.com",
+  databaseURL: "https://greencorridor-dd05d-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "greencorridor-dd05d",
+  storageBucket: "greencorridor-dd05d.firebasestorage.app",
+  messagingSenderId: "437478898078",
+  appId: "1:437478898078:web:80eb966eaa8ff78d697e8f"
+};
+
+
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+/* ================= CANVAS ================= */
+const canvas = document.getElementById("junctionCanvas");
+const ctx = canvas.getContext("2d");
+
+/* ================= GLOBAL STATE ================= */
+let emergencyMode = false;
+
+/* ================= SIGNALS ================= */
+const signals = [
+  { x: 420, y: 340, state: "RED" },   // Top
+  { x: 520, y: 420, state: "RED" },   // Right
+  { x: 420, y: 520, state: "RED" },   // Bottom
+  { x: 320, y: 420, state: "RED" }    // Left
+];
+
+/* ================= CARS ================= */
+const cars = [
+  { x: 410, y: -50, dx: 0, dy: 2 },
+  { x: 900, y: 440, dx: -2, dy: 0 },
+  { x: 440, y: 900, dx: 0, dy: -2 },
+  { x: -50, y: 460, dx: 2, dy: 0 }
+];
+
+/* ================= AMBULANCE ================= */
+const ambulance = {
+  x: 440,
+  y: 900,
+  active: false,
+  index: 0
+};
+
+/* ================= FIREBASE LISTENER ================= */
+db.ref("simulation/ambulance").on("value", snap => {
+  const data = snap.val();
+  if (!data) return;
+
+  console.log("🚑 AMBULANCE SYNC:", data);
+
+  ambulance.active = true;
+  ambulance.index = data.index;
+
+  // 🔁 Map index → canvas position
+  ambulance.x = 440;
+  ambulance.y = 900 - data.index * 12;
+
+  // Emergency logic
+  emergencyMode = true;
+
+  // Give green to bottom → up
+  signals.forEach(s => s.state = "RED");
+  signals[2].state = "GREEN";
+});
+
+/* ================= DRAW FUNCTIONS ================= */
+function drawRoads() {
+  ctx.fillStyle = "#2c2c2c";
+  ctx.fillRect(380, 0, 140, 900);
+  ctx.fillRect(0, 380, 900, 140);
+}
+
+function drawSignals() {
+  signals.forEach(s => {
+    ctx.fillStyle = "#111";
+    ctx.fillRect(s.x - 15, s.y - 40, 30, 70);
+
+    ctx.fillStyle = s.state === "RED" ? "red" : "#400";
+    ctx.beginPath();
+    ctx.arc(s.x, s.y - 20, 7, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = s.state === "GREEN" ? "lime" : "#040";
+    ctx.beginPath();
+    ctx.arc(s.x, s.y + 20, 7, 0, Math.PI * 2);
+    ctx.fill();
+  });
+}
+
+function drawCars() {
+  ctx.fillStyle = "orange";
+  cars.forEach(car => ctx.fillRect(car.x, car.y, 25, 40));
+}
+
+function drawAmbulance() {
+  if (!ambulance.active) return;
+
+  ctx.fillStyle = "#3498db";
+  ctx.fillRect(ambulance.x, ambulance.y, 30, 50);
+
+  ctx.fillStyle = "red";
+  ctx.fillRect(ambulance.x + 10, ambulance.y - 10, 10, 10);
+}
+
+/* ================= UPDATE ================= */
+function updateCars() {
+  cars.forEach(car => {
+    let stop = emergencyMode &&
+      car.x > 350 && car.x < 550 &&
+      car.y > 350 && car.y < 550;
+
+    if (!stop) {
+      car.x += car.dx;
+      car.y += car.dy;
+    }
+  });
+}
+
+/* ================= MAIN LOOP ================= */
+function drawScene() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  drawRoads();
+  drawSignals();
+  drawCars();
+  drawAmbulance();
+  updateCars();
+
+  requestAnimationFrame(drawScene);
+}
+
+drawScene();
+</script>
+
+</body>
+</html>
